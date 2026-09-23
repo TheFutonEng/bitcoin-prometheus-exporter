@@ -1,0 +1,114 @@
+name: bitcoin-exporter
+
+services:
+  # The node image declares /data as a volume but does not ship the directory,
+  # so docker creates the mountpoint owned by root while bitcoind runs as
+  # 65532. This hands the volume over before the node starts.
+  init:
+    image: busybox:1.37
+    container_name: bitcoin-init
+    command: ["sh", "-c", "chown -R 65532:65532 /data && chmod 0750 /data"]
+    user: "0:0"
+    volumes:
+      - bitcoin-data:/data
+
+  bitcoind:
+    image: ghcr.io/thefutoneng/bitcoin:31.1
+    container_name: bitcoind
+    command:
+      - -datadir=/data
+      - -printtoconsole
+      - -chain=${BITCOIN_CHAIN:-regtest}
+      - -server=1
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcport=8332
+      # Lets the regtest wallet build transactions before fee estimation has
+      # any history to work from.
+      - -fallbackfee=0.0002
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - bitcoin-data:/data
+    ports:
+      - "127.0.0.1:8332:8332"
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/bitcoin-cli
+        - -datadir=/data
+        - -chain=${BITCOIN_CHAIN:-regtest}
+        - -rpcport=8332
+        - getblockchaininfo
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  exporter:
+    build:
+      context: .
+      args:
+        VERSION: ${EXPORTER_VERSION:-dev}
+    image: bitcoin-prometheus-exporter:dev
+    container_name: bitcoin-exporter
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    command:
+      - -rpc.url=http://bitcoind:8332
+      - -rpc.chain=${BITCOIN_CHAIN:-regtest}
+      - -rpc.cookie-file=${BITCOIN_COOKIE:-/data/regtest/.cookie}
+      # The demo stack turns on everything so the dashboard has data to show.
+      - -collector.enable=wallet
+      - -collector.peers.detail
+    volumes:
+      # Read-only: the exporter only needs the cookie file.
+      - bitcoin-data:/data:ro
+    ports:
+      - "127.0.0.1:9332:9332"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: bitcoin-prometheus
+    depends_on:
+      - exporter
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    container_name: bitcoin-grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
+volumes:
+  bitcoin-data:
+  prometheus-data:
+  grafana-data:
