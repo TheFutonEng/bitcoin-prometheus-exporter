@@ -6,9 +6,11 @@ reported as invalid only when Prometheus rejects them; a valid query that
 returns nothing is fine, because a regtest node legitimately has no peers, no
 fee history and no RPC errors.
 """
+import http.client
 import json
 import pathlib
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +22,28 @@ SUBSTITUTIONS = {
     "$instance": "exporter:9332",
     "$__rate_interval": "1m",
 }
+
+
+def run_query(query: str):
+    """Runs one query, retrying transport failures so a Prometheus hiccup is not
+    reported as an invalid query. Returns (body, error)."""
+    last = "unknown"
+    for attempt in range(3):
+        url = f"{PROMETHEUS}/api/v1/query?" + urllib.parse.urlencode({"query": query})
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:
+                return json.load(response), None
+        except urllib.error.HTTPError as err:
+            # Prometheus answers a malformed query with 400 and a JSON body
+            # naming the problem; that is a real failure, not a transient.
+            try:
+                return None, json.load(err).get("error", str(err))
+            except json.JSONDecodeError:
+                last = str(err)
+        except (OSError, http.client.HTTPException, json.JSONDecodeError) as err:
+            last = f"{type(err).__name__}: {err}"
+        time.sleep(2 * (attempt + 1))
+    return None, f"prometheus unreachable: {last}"
 
 
 def queries(panels):
@@ -39,12 +63,9 @@ def main() -> int:
         for placeholder, value in SUBSTITUTIONS.items():
             query = query.replace(placeholder, value)
 
-        url = f"{PROMETHEUS}/api/v1/query?" + urllib.parse.urlencode({"query": query})
-        try:
-            with urllib.request.urlopen(url, timeout=10) as response:
-                body = json.load(response)
-        except urllib.error.HTTPError as err:
-            invalid.append((title, query, json.load(err).get("error", str(err))))
+        body, error = run_query(query)
+        if error is not None:
+            invalid.append((title, query, error))
             continue
         checked += 1
 

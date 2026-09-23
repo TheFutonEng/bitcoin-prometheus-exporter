@@ -90,10 +90,8 @@ jobs:
           done
           echo "prometheus never scraped the exporter successfully"; exit 1
 
-      - name: Alert rules load
-        run: |
-          curl -fsS http://127.0.0.1:9090/api/v1/rules \
-            | python3 -c 'import sys,json;g=json.load(sys.stdin)["data"]["groups"];bad=[r["name"] for x in g for r in x["rules"] if r["health"]!="ok"];sys.exit(f"unhealthy rules: {bad}" if bad else 0)'
+      - name: Alert rules load and evaluate
+        run: python3 scripts/check-alert-rules.py
 
       - name: Grafana provisions the dashboard
         run: |
