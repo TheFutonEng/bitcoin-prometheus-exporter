@@ -48,6 +48,42 @@ run it against a config file of your own.
 
 Tear it all down with `make down`.
 
+#### Reaching it from another machine
+
+Every port is published on `127.0.0.1`, so the stack is not reachable off the
+host. To change that, copy the example override:
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+$EDITOR docker-compose.override.yml      # set the addresses
+docker compose up -d
+```
+
+Compose loads `docker-compose.override.yml` automatically, and it is gitignored
+because the right address is machine specific. Note the `!override` tag in the
+example: it *replaces* the port list, whereas a plain override appends and
+leaves the loopback binding published as well.
+
+Then point the make targets at the new address:
+
+```bash
+make metrics     EXPORTER_URL=http://203.0.113.10:19332
+make check-stack PROMETHEUS_URL=http://203.0.113.10:19090
+```
+
+Before you do this on a network you share: Grafana ships `admin`/`admin` with
+anonymous viewing on, Prometheus and the exporter have no authentication, and
+on a real node the exporter publishes peer addresses and — with the wallet
+collector enabled — balances. bitcoind's RPC is deliberately left off the
+override. A host firewall will not help, either: docker manages its own
+iptables rules and published ports bypass `ufw`.
+
+An SSH tunnel avoids all of that if you only need it occasionally:
+
+```bash
+ssh -N -L 13000:127.0.0.1:3000 you@the-host       # then http://localhost:13000
+```
+
 ### Against a node you already run
 
 ```bash

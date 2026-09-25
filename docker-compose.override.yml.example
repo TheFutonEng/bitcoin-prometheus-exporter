@@ -1,0 +1,52 @@
+# Publishes the stack somewhere other than loopback, for reaching it from
+# another machine.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   $EDITOR docker-compose.override.yml      # set the addresses
+#   docker compose up -d
+#
+# Compose loads docker-compose.override.yml automatically, so no -f flag is
+# needed. It is gitignored, because the right address is machine specific.
+#
+# `!override` REPLACES the port list from docker-compose.yml. Leave it out and
+# compose appends instead, keeping the 127.0.0.1 binding published alongside
+# the new one — which usually is not what you meant.
+#
+# 203.0.113.10 below is a documentation address. Replace it with the interface
+# you actually want to listen on, and read the note at the bottom first.
+
+services:
+  grafana:
+    ports: !override
+      - "203.0.113.10:13000:3000"
+
+  prometheus:
+    ports: !override
+      - "203.0.113.10:19090:9090"
+
+  exporter:
+    ports: !override
+      - "203.0.113.10:19332:9332"
+
+# bitcoind's RPC (8332) is deliberately absent. It is cookie-authenticated, but
+# there is no reason to put a node's RPC on a wire.
+#
+# Note what publishing these actually exposes:
+#
+#   - Grafana ships with admin/admin and anonymous viewing enabled.
+#   - Prometheus and the exporter have no authentication at all.
+#   - On a real node the exporter's output includes peer addresses, and with
+#     the wallet collector enabled, wallet balances.
+#
+# Prefer a private interface — a VPN address rather than a LAN one, and a
+# specific address rather than 0.0.0.0. On a network you share with anyone
+# else, change those defaults first.
+#
+# A host firewall will not cover this: docker manages its own iptables rules
+# and a published port bypasses ufw entirely. `iptables -I DOCKER-USER ...` is
+# the lever if you need to restrict it.
+#
+# Once the stack is off loopback, point the make targets at it:
+#
+#   make metrics     EXPORTER_URL=http://203.0.113.10:19332
+#   make check-stack PROMETHEUS_URL=http://203.0.113.10:19090

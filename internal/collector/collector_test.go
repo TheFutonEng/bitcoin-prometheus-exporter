@@ -3,9 +3,11 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/TheFutonEng/bitcoin-prometheus-exporter/internal/rpc"
 )
@@ -528,4 +531,128 @@ func TestRegisteredDefaults(t *testing.T) {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestObserveRPCCountsRequestsAndErrors(t *testing.T) {
+	node := newFakeNode(t, map[string]any{})
+	e, err := NewExporter(node.client(), []string{"chain"}, Config{Logger: discardLogger()}, time.Second)
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+
+	e.ObserveRPC("getblockchaininfo", 10*time.Millisecond, nil)
+	e.ObserveRPC("getblockchaininfo", 20*time.Millisecond, nil)
+	e.ObserveRPC("getblockchaininfo", 5*time.Millisecond, errors.New("connection refused"))
+	e.ObserveRPC("uptime", time.Millisecond, nil)
+
+	// Every call counts as a request; only the failure counts as an error, and
+	// a method that never failed must not appear in the error counter at all.
+	expectMetrics(t, e, `
+# HELP bitcoin_exporter_rpc_requests_total Total JSON-RPC calls made to the node.
+# TYPE bitcoin_exporter_rpc_requests_total counter
+bitcoin_exporter_rpc_requests_total{method="getblockchaininfo"} 3
+bitcoin_exporter_rpc_requests_total{method="uptime"} 1
+# HELP bitcoin_exporter_rpc_errors_total Total JSON-RPC calls that returned an error.
+# TYPE bitcoin_exporter_rpc_errors_total counter
+bitcoin_exporter_rpc_errors_total{method="getblockchaininfo"} 1
+`, "bitcoin_exporter_rpc_requests_total", "bitcoin_exporter_rpc_errors_total")
+
+	count, sum := histogramIn(t, gatherOnce(t, e), "bitcoin_exporter_rpc_duration_seconds", "getblockchaininfo")
+	if count != 3 {
+		t.Errorf("duration histogram count = %d, want 3", count)
+	}
+	if want := 0.035; math.Abs(sum-want) > 1e-9 {
+		t.Errorf("duration histogram sum = %v, want %v", sum, want)
+	}
+}
+
+func TestClientReportsThroughTheExporter(t *testing.T) {
+	// The binary wires the client's observer to the exporter after both exist.
+	// If that wiring breaks, the self-metrics silently stay at zero, so this
+	// asserts a real scrape moves them.
+	node := newFakeNode(t, map[string]any{
+		"uptime":            `3600`,
+		"getblockchaininfo": blockchainInfoJSON,
+		"getmempoolinfo":    &rpc.Error{Code: rpc.ErrMiscError, Message: "no mempool"},
+	})
+	client := node.client()
+	e, err := NewExporter(client, []string{"chain", "mempool"}, Config{Logger: discardLogger()}, 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewExporter: %v", err)
+	}
+	client.SetObserver(e)
+
+	// Gathering drives a scrape, which itself makes RPC calls, so this has to
+	// happen exactly once and every assertion read from the same snapshot.
+	families := gatherOnce(t, e)
+
+	for _, method := range []string{"uptime", "getblockchaininfo", "getmempoolinfo"} {
+		if got := counterIn(families, "bitcoin_exporter_rpc_requests_total", method); got < 1 {
+			t.Errorf("requests_total{method=%q} = %v, want at least 1", method, got)
+		}
+	}
+	// getmempoolinfo was refused; the other two answered.
+	if got := counterIn(families, "bitcoin_exporter_rpc_errors_total", "getmempoolinfo"); got != 1 {
+		t.Errorf(`errors_total{method="getmempoolinfo"} = %v, want 1`, got)
+	}
+	if got := counterIn(families, "bitcoin_exporter_rpc_errors_total", "getblockchaininfo"); got != 0 {
+		t.Errorf(`errors_total{method="getblockchaininfo"} = %v, want 0`, got)
+	}
+}
+
+// gatherOnce registers c with a fresh pedantic registry and gathers a single
+// snapshot. Callers must reuse the result: for the Exporter, gathering runs a
+// scrape, so gathering per assertion would inflate the self-metrics.
+func gatherOnce(t *testing.T, c prometheus.Collector) []*dto.MetricFamily {
+	t.Helper()
+	reg := prometheus.NewPedanticRegistry()
+	if err := reg.Register(c); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	return families
+}
+
+// counterIn returns a counter's value for one method label, or 0 when the
+// series was never created.
+func counterIn(families []*dto.MetricFamily, name, method string) float64 {
+	for _, m := range metricsIn(families, name) {
+		if labelValue(m, "method") == method && m.Counter != nil {
+			return m.Counter.GetValue()
+		}
+	}
+	return 0
+}
+
+// histogramIn returns a histogram's observation count and sum for one method.
+func histogramIn(t *testing.T, families []*dto.MetricFamily, name, method string) (uint64, float64) {
+	t.Helper()
+	for _, m := range metricsIn(families, name) {
+		if labelValue(m, "method") == method && m.Histogram != nil {
+			return m.Histogram.GetSampleCount(), m.Histogram.GetSampleSum()
+		}
+	}
+	t.Fatalf("no %s series for method %q", name, method)
+	return 0, 0
+}
+
+func metricsIn(families []*dto.MetricFamily, name string) []*dto.Metric {
+	for _, mf := range families {
+		if mf.GetName() == name {
+			return mf.GetMetric()
+		}
+	}
+	return nil
+}
+
+func labelValue(m *dto.Metric, name string) string {
+	for _, l := range m.GetLabel() {
+		if l.GetName() == name {
+			return l.GetValue()
+		}
+	}
+	return ""
 }
