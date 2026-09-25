@@ -1,0 +1,87 @@
+groups:
+  - name: bitcoin-node
+    rules:
+      - alert: BitcoinNodeDown
+        expr: bitcoin_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bitcoin node {{ $labels.node }} is not answering RPC"
+          description: "The exporter has been unable to reach the node for 2 minutes."
+
+      - alert: BitcoinExporterDown
+        expr: up{job="bitcoin"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bitcoin exporter {{ $labels.instance }} is not being scraped"
+
+      - alert: BitcoinNodeBehind
+        expr: bitcoin_blocks_behind > 3 and bitcoin_initial_block_download == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bitcoin node is {{ $value }} blocks behind its known headers"
+
+      - alert: BitcoinNoNewBlocks
+        expr: time() - bitcoin_best_block_time_seconds > 3600 and bitcoin_initial_block_download == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No new block accepted in over an hour"
+          description: "Expected roughly one block every 10 minutes on mainnet; check connectivity and clock."
+
+      - alert: BitcoinLowPeerCount
+        expr: bitcoin_connections < 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bitcoin node has only {{ $value }} peer connections"
+
+      - alert: BitcoinNoOutboundPeers
+        expr: bitcoin_peers{direction="outbound"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bitcoin node has no outbound peers"
+          description: "A node with only inbound peers is trivially eclipse-attackable."
+
+      - alert: BitcoinMempoolNearlyFull
+        expr: bitcoin_mempool_fill_ratio > 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool is at {{ $value | humanizePercentage }} of -maxmempool"
+          description: "Low fee transactions are being evicted; the node's min relay fee is rising."
+
+      - alert: BitcoinDiskGrowth
+        expr: predict_linear(bitcoin_size_on_disk_bytes[6h], 7 * 24 * 3600) > 1.2 * bitcoin_size_on_disk_bytes
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Block store is projected to grow over 20% in the next week"
+
+      - alert: BitcoinNodeWarning
+        expr: bitcoin_warnings > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bitcoin node is reporting {{ $value }} warning(s)"
+          description: "Inspect bitcoin_warning_info for the text."
+
+      - alert: BitcoinClockSkew
+        expr: abs(bitcoin_time_offset_seconds) > 60
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node clock is {{ $value }}s off from its peers"

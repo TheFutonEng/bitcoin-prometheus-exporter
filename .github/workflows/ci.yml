@@ -1,0 +1,154 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+  NODE_IMAGE: ghcr.io/thefutoneng/bitcoin:31.1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: |
+          go vet ./...
+          go vet -tags integration ./...
+
+      - name: Unit tests
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Pull the node image
+        run: docker pull "$NODE_IMAGE"
+
+      - name: Integration tests
+        run: go test -tags integration -timeout 15m ./internal/integration/
+
+  stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Start the stack
+        run: docker compose up -d --build --wait --wait-timeout 180
+
+      - name: Generate regtest activity
+        run: ./scripts/regtest-activity.sh
+
+      - name: Exporter serves metrics
+        run: |
+          curl -fsS --retry 10 --retry-delay 2 --retry-all-errors \
+            http://127.0.0.1:9332/metrics > metrics.txt
+          grep -q '^bitcoin_up 1$' metrics.txt
+          grep -q '^bitcoin_blocks ' metrics.txt
+          # Every enabled collector must have succeeded against a healthy node.
+          if grep -E '^bitcoin_exporter_collector_success\{.*\} 0$' metrics.txt; then
+            echo "a collector failed"; exit 1
+          fi
+
+      - name: Prometheus scrapes the exporter
+        run: |
+          for _ in $(seq 1 30); do
+            health=$(curl -fsS 'http://127.0.0.1:9090/api/v1/targets?state=active' \
+              | python3 -c 'import sys,json;print(next((t["health"] for t in json.load(sys.stdin)["data"]["activeTargets"] if t["labels"]["job"]=="bitcoin"), "missing"))')
+            [ "$health" = "up" ] && exit 0
+            sleep 2
+          done
+          echo "prometheus never scraped the exporter successfully"; exit 1
+
+      - name: Alert rules load and evaluate
+        run: python3 scripts/check-alert-rules.py
+
+      - name: Grafana provisions the dashboard
+        run: |
+          curl -fsS --retry 30 --retry-delay 2 --retry-all-errors \
+            -u admin:admin http://127.0.0.1:3000/api/dashboards/uid/bitcoin-node \
+            | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["dashboard"]["title"], len(d["dashboard"]["panels"]), "panels")'
+
+      - name: Every dashboard query is valid
+        run: python3 scripts/check-dashboard-queries.py
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail 100
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  image:
+    needs: [test, integration]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

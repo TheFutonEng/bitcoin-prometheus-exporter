@@ -1,0 +1,5 @@
+/dist/
+/bitcoin-exporter
+
+# Local port-publishing overrides, machine specific
+docker-compose.override.yml

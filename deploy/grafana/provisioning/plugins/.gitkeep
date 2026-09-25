@@ -1,0 +1,2 @@
+# Grafana reads this directory at startup; keeping it present avoids a
+# provisioning error in the logs.
