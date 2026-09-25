@@ -7,12 +7,12 @@
 set -euo pipefail
 
 CONTAINER=${CONTAINER:-bitcoind}
-CHAIN=${BITCOIN_CHAIN:-regtest}
 WALLET=${WALLET:-miner}
 
+# bitcoin-cli reads /data/bitcoin.conf, the same file the node does, so it
+# resolves the network and RPC port without being told.
 cli() {
-  docker exec "$CONTAINER" /usr/local/bin/bitcoin-cli \
-    -datadir=/data -chain="$CHAIN" -rpcport=8332 "$@"
+  docker exec "$CONTAINER" /usr/local/bin/bitcoin-cli -datadir=/data "$@"
 }
 
 ensure_wallet() {

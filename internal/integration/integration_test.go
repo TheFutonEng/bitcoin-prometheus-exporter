@@ -27,8 +27,8 @@ import (
 )
 
 // nodeImage is the node build the exporter is verified against. Override it to
-// test another release: NODE_IMAGE=ghcr.io/thefutoneng/bitcoin:30.0 go test ...
-var nodeImage = envOr("NODE_IMAGE", "ghcr.io/thefutoneng/bitcoin:31.1")
+// test another release: NODE_IMAGE=ghcr.io/thefutoneng/bitcoin:31.1 go test ...
+var nodeImage = envOr("NODE_IMAGE", "ghcr.io/thefutoneng/bitcoin:31.1-1")
 
 func TestExporterAgainstRealNode(t *testing.T) {
 	node := startNode(t)
@@ -198,11 +198,18 @@ func startNode(t *testing.T, extraArgs ...string) *node {
 		t.Fatalf("chmod tempdir: %v", err)
 	}
 
+	// The entrypoint is overridden and every flag passed explicitly so the
+	// harness does not depend on how a given image splits entrypoint from cmd.
+	// 31.1 kept -datadir in cmd, which our own args would have replaced; 31.1-1
+	// moved it into the entrypoint, where repeating it would duplicate it. This
+	// way any bitcoind image works, which is what NODE_IMAGE is for. The
+	// image's own defaults are covered by the compose stack instead.
 	args := []string{
 		"run", "-d", "--name", name, "--network", network,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-p", "127.0.0.1:0:8332",
 		"-v", dir + ":/data",
+		"--entrypoint", "/usr/local/bin/bitcoind",
 		nodeImage,
 		"-datadir=/data", "-printtoconsole", "-chain=regtest", "-server=1",
 		"-rpcbind=0.0.0.0", "-rpcallowip=0.0.0.0/0", "-rpcport=8332", "-fallbackfee=0.0002",

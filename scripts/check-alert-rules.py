@@ -8,6 +8,7 @@ for the group to evaluate before looking at it.
 """
 import http.client
 import json
+import os
 import pathlib
 import re
 import sys
@@ -20,7 +21,10 @@ import urllib.request
 # that is not JSON. They all mean "not ready yet", so they are caught together.
 TRANSIENT = (OSError, http.client.HTTPException, json.JSONDecodeError)
 
-PROMETHEUS = "http://127.0.0.1:9090"
+# Overridable so these work against a stack that
+# docker-compose.override.yml republished elsewhere:
+#   PROMETHEUS_URL=http://192.168.1.6:19090 python3 scripts/...
+PROMETHEUS = os.environ.get("PROMETHEUS_URL", "http://127.0.0.1:9090").rstrip("/")
 RULE_FILE = pathlib.Path(__file__).resolve().parent.parent / "deploy/prometheus/alerts.yml"
 NEVER_EVALUATED = "0001-01-01T00:00:00Z"
 TIMEOUT_SECONDS = 120

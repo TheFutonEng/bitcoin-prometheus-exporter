@@ -1,9 +1,16 @@
 BINARY      := bitcoin-exporter
 PKG         := ./cmd/bitcoin-exporter
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-NODE_IMAGE  ?= ghcr.io/thefutoneng/bitcoin:31.1
+NODE_IMAGE  ?= ghcr.io/thefutoneng/bitcoin:31.1-1
 IMAGE       ?= bitcoin-prometheus-exporter
 LDFLAGS     := -s -w -X main.version=$(VERSION)
+
+# Where a running stack is reachable. Override both when
+# docker-compose.override.yml republishes the stack off loopback, e.g.
+#   make metrics EXPORTER_URL=http://192.168.1.6:19332
+EXPORTER_URL   ?= http://127.0.0.1:9332
+PROMETHEUS_URL ?= http://127.0.0.1:9090
+export PROMETHEUS_URL
 
 .DEFAULT_GOAL := help
 
@@ -42,7 +49,7 @@ up: ## Start the node, exporter, Prometheus and Grafana
 
 .PHONY: down
 down: ## Stop the stack and delete its volumes
-	docker compose down -v
+	docker compose down -v --remove-orphans
 
 .PHONY: logs
 logs: ## Follow the exporter's logs
@@ -50,7 +57,12 @@ logs: ## Follow the exporter's logs
 
 .PHONY: metrics
 metrics: ## Print the exporter's current metrics
-	@curl -fsS http://127.0.0.1:9332/metrics
+	@curl -fsS $(EXPORTER_URL)/metrics
+
+.PHONY: check-stack
+check-stack: ## Run the alert-rule and dashboard checks CI runs against a live stack
+	python3 scripts/check-alert-rules.py
+	python3 scripts/check-dashboard-queries.py
 
 .PHONY: activity
 activity: ## Mine a block and broadcast transactions on the regtest stack
