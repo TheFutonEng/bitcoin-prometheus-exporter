@@ -1,45 +1,24 @@
 name: bitcoin-exporter
 
 services:
-  # The node image declares /data as a volume but does not ship the directory,
-  # so docker creates the mountpoint owned by root while bitcoind runs as
-  # 65532. This hands the volume over before the node starts.
-  init:
-    image: busybox:1.37
-    container_name: bitcoin-init
-    command: ["sh", "-c", "chown -R 65532:65532 /data && chmod 0750 /data"]
-    user: "0:0"
-    volumes:
-      - bitcoin-data:/data
-
   bitcoind:
-    image: ghcr.io/thefutoneng/bitcoin:31.1
+    image: ghcr.io/thefutoneng/bitcoin:31.1-1
     container_name: bitcoind
-    command:
-      - -datadir=/data
-      - -printtoconsole
-      - -chain=${BITCOIN_CHAIN:-regtest}
-      - -server=1
-      - -rpcbind=0.0.0.0
-      - -rpcallowip=0.0.0.0/0
-      - -rpcport=8332
-      # Lets the regtest wallet build transactions before fee estimation has
-      # any history to work from.
-      - -fallbackfee=0.0002
-    depends_on:
-      init:
-        condition: service_completed_successfully
+    # No command: the image entrypoint already supplies -datadir=/data and
+    # -printtoconsole, and every other setting comes from the mounted
+    # bitcoin.conf so a user can replace the node's configuration wholesale.
     volumes:
       - bitcoin-data:/data
+      - ${BITCOIN_CONF:-./deploy/bitcoin/regtest.conf}:/data/bitcoin.conf:ro
     ports:
       - "127.0.0.1:8332:8332"
     healthcheck:
+      # bitcoin-cli reads the same bitcoin.conf, so it finds the network and RPC
+      # port without being told either.
       test:
         - CMD
         - /usr/local/bin/bitcoin-cli
         - -datadir=/data
-        - -chain=${BITCOIN_CHAIN:-regtest}
-        - -rpcport=8332
         - getblockchaininfo
       interval: 5s
       timeout: 5s
@@ -59,7 +38,6 @@ services:
         condition: service_healthy
     command:
       - -rpc.url=http://bitcoind:8332
-      - -rpc.chain=${BITCOIN_CHAIN:-regtest}
       - -rpc.cookie-file=${BITCOIN_COOKIE:-/data/regtest/.cookie}
       # The demo stack turns on everything so the dashboard has data to show.
       - -collector.enable=wallet

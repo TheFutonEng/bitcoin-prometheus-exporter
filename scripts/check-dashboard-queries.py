@@ -8,6 +8,7 @@ fee history and no RPC errors.
 """
 import http.client
 import json
+import os
 import pathlib
 import sys
 import time
@@ -16,7 +17,10 @@ import urllib.parse
 import urllib.request
 
 DASHBOARD = pathlib.Path(__file__).resolve().parent.parent / "deploy/grafana/dashboards/bitcoin-node.json"
-PROMETHEUS = "http://127.0.0.1:9090"
+# Overridable so these work against a stack that
+# docker-compose.override.yml republished elsewhere:
+#   PROMETHEUS_URL=http://192.168.1.6:19090 python3 scripts/...
+PROMETHEUS = os.environ.get("PROMETHEUS_URL", "http://127.0.0.1:9090").rstrip("/")
 SUBSTITUTIONS = {
     "$job": "bitcoin",
     "$instance": "exporter:9332",

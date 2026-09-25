@@ -8,7 +8,7 @@ It talks to any Bitcoin Core node reachable over RPC, local or remote, pruned or
 archival, with or without a wallet. Missing or version-specific RPC fields are
 omitted rather than reported as zero, so a metric that is present is a metric the
 node actually answered. Development and CI verify it against
-`ghcr.io/thefutoneng/bitcoin:31.1`.
+`ghcr.io/thefutoneng/bitcoin:31.1-1`.
 
 ```
 ┌──────────┐   JSON-RPC    ┌──────────┐   /metrics   ┌────────────┐
@@ -36,15 +36,15 @@ make activity                 # mine a block and broadcast a few transactions
 
 `make activity` is worth running a few times — a fresh regtest chain has no
 blocks, no peers and no fee history, so most panels start empty. For a chain
-with real peers and real fee estimates, edit `.env`:
+with real peers and real fee estimates, point `.env` at the signet config:
 
 ```ini
-BITCOIN_CHAIN=signet
+BITCOIN_CONF=./deploy/bitcoin/signet.conf
 BITCOIN_COOKIE=/data/signet/.cookie
 ```
 
-and `make down && make up`. The same two variables point the stack at `main` or
-`testnet4` (mainnet's cookie lives at `/data/.cookie`, with no subdirectory).
+and `make down && make up`. See [Node configuration](#node-configuration) to
+run it against a config file of your own.
 
 Tear it all down with `make down`.
 
@@ -85,6 +85,44 @@ docker run --rm -p 9332:9332 \
 
 The image runs as uid `65532`, the same uid as `ghcr.io/thefutoneng/bitcoin`, so
 a shared data volume's cookie file is readable without extra permissions.
+
+## Node configuration
+
+The stack passes **no command-line flags** to bitcoind. Everything the node
+needs comes from a config file mounted at `/data/bitcoin.conf`, which the image
+reads because its entrypoint sets `-datadir=/data`. Two are provided:
+
+| File | Network |
+| --- | --- |
+| `deploy/bitcoin/regtest.conf` | regtest, the default |
+| `deploy/bitcoin/signet.conf` | signet |
+
+To run the stack against your own configuration, point `BITCOIN_CONF` at your
+file and `BITCOIN_COOKIE` at the matching cookie path:
+
+```ini
+BITCOIN_CONF=./my-bitcoin.conf
+BITCOIN_COOKIE=/data/signet/.cookie
+```
+
+Two constraints on that file:
+
+- **It must select its own network** — `regtest=1`, `signet=1`, `testnet4=1`, or
+  nothing at all for mainnet. The stack deliberately passes no `-chain`, because
+  bitcoind refuses to start when a command-line `-chain` and a conf-file network
+  setting are both present: *"Invalid combination of -regtest, -signet, -testnet,
+  -testnet4 and -chain. Can use at most one."*
+- **RPC must be reachable from the exporter container** — `rpcbind=0.0.0.0`,
+  an `rpcallowip` covering the compose network, and `rpcport=8332`.
+  Network-specific settings belong in a `[regtest]` / `[signet]` section; only
+  the network selector and `server=1` go at the top level.
+
+`bitcoin-cli` reads the same file, so `docker compose exec bitcoind bitcoin-cli
+-datadir=/data <command>` needs no network or port flags either — which is why
+the healthcheck and `scripts/regtest-activity.sh` pass none.
+
+Nothing is published off the host: `docker-compose.yml` binds every port to
+`127.0.0.1`.
 
 ## Authentication
 
@@ -366,17 +404,32 @@ use a single-hue ordinal ramp instead of categorical colours.
 make test               # unit tests, race detector on
 make lint               # gofmt + go vet, including the integration build tag
 make test-integration   # spins up real node containers and scrapes them
+make check-stack        # the alert-rule and dashboard checks CI runs, against a live stack
 make image              # build the container image
 ```
 
-The integration tests start `ghcr.io/thefutoneng/bitcoin:31.1` in regtest,
+`make metrics` and `make check-stack` assume the stack is on loopback. Point
+them elsewhere if you have republished it:
+
+```bash
+make metrics     EXPORTER_URL=http://192.168.1.6:19332
+make check-stack PROMETHEUS_URL=http://192.168.1.6:19090
+```
+
+The integration tests start `ghcr.io/thefutoneng/bitcoin:31.1-1` in regtest,
 mine blocks, spend, peer two nodes together, and assert on the gathered metrics
 through a `prometheus.NewPedanticRegistry` — the same strictness the binary
 applies at runtime. Point them at another release to check compatibility:
 
 ```bash
-NODE_IMAGE=ghcr.io/thefutoneng/bitcoin:30.0 make test-integration
+NODE_IMAGE=ghcr.io/thefutoneng/bitcoin:31.1 make test-integration
 ```
+
+The harness overrides the image's entrypoint and passes every bitcoind flag
+itself, so it does not care how a given image splits entrypoint from cmd — 31.1
+and 31.1-1 differ there. CI runs the suite against both. The image's own
+defaults, including the mounted `bitcoin.conf`, are covered by the compose
+stack instead.
 
 They skip themselves if Docker is not available.
 
