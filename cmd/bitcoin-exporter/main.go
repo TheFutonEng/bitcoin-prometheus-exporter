@@ -28,8 +28,14 @@ import (
 	"github.com/TheFutonEng/bitcoin-prometheus-exporter/internal/rpc"
 )
 
-// version is overridden at build time with -ldflags "-X main.version=...".
-var version = "dev"
+// version and revision are overridden at build time with
+// -ldflags "-X main.version=... -X main.revision=...". Container builds have no
+// .git directory, so the VCS stamp Go would otherwise embed is unavailable and
+// the release passes the commit in explicitly.
+var (
+	version  = "dev"
+	revision = ""
+)
 
 type config struct {
 	listenAddr    string
@@ -301,16 +307,23 @@ func resolveCollectors(cfg *config) ([]string, error) {
 }
 
 func buildInfoCollector() prometheus.Collector {
-	revision, buildDate := "unknown", "unknown"
+	rev, buildDate := revision, "unknown"
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {
 			switch setting.Key {
 			case "vcs.revision":
-				revision = setting.Value
+				// A local `go build` stamps this; an -ldflags value from the
+				// release takes precedence because container builds have none.
+				if rev == "" {
+					rev = setting.Value
+				}
 			case "vcs.time":
 				buildDate = setting.Value
 			}
 		}
+	}
+	if rev == "" {
+		rev = "unknown"
 	}
 	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: collector.Namespace,
@@ -318,7 +331,7 @@ func buildInfoCollector() prometheus.Collector {
 		Name:      "build_info",
 		Help:      "Always 1, labelled with the build identity of the running exporter.",
 	}, []string{"version", "revision", "build_date", "goversion"})
-	g.WithLabelValues(buildVersion(), revision, buildDate, runtime.Version()).Set(1)
+	g.WithLabelValues(buildVersion(), rev, buildDate, runtime.Version()).Set(1)
 	return g
 }
 
