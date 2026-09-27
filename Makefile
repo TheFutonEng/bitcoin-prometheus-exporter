@@ -127,12 +127,16 @@ smoke: ## Boot the local image and prove it serves metrics
 	@scripts/smoke-image.sh $(IMAGE_REF)
 
 .PHONY: push
+# Tags go in as repeated -t flags, not as a comma-separated name= inside
+# --output: the output spec is itself CSV, so a comma in a value is read as the
+# next field and buildx rejects it ("invalid value ...:0.1").
 push: check-pins builder ## Build every platform and push one index, with attestations
 	docker buildx --builder $(BUILDER) build --platform $(subst $(space),$(comma),$(PLATFORMS)) \
+	  $(foreach n,$(PUBLISH_NAMES),-t $(n)) \
 	  --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) \
 	  --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
 	  --provenance=mode=max --sbom=true \
-	  --output "type=image,name=$(subst $(space),$(comma),$(PUBLISH_NAMES)),push=true,rewrite-timestamp=true" .
+	  --output "type=image,push=true,rewrite-timestamp=true" .
 
 .PHONY: digest-ref
 digest-ref: ## Print the published index as image@sha256:... — this is what consumers pin

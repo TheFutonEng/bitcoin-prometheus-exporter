@@ -182,11 +182,20 @@ jobs:
 
       # Everything below reads the REGISTRY, by digest, per platform.
       #
-      #   verify-published        pull that platform by digest and boot it. By
-      #                           digest, because a tag reference could be
-      #                           satisfied from the local store — which would
-      #                           smoke-test what we just built rather than what
-      #                           is published.
+      #   verify-published        pull that platform by digest and, when this
+      #                           runner can run it, boot it. By digest, because
+      #                           a tag reference could be satisfied from the
+      #                           local store — which would smoke-test what we
+      #                           just built rather than what is published.
+      #
+      #                           This runner is amd64, so arm64 is pulled but
+      #                           not booted. Emulating it would be a WEAKER
+      #                           check than what already covers it: preflight
+      #                           booted that build on native arm64, and
+      #                           verify-repro-published proves the published
+      #                           image is bit-for-bit that build. Native boot
+      #                           of X plus published == X gives native boot of
+      #                           the published image, with no QEMU in the chain.
       #   verify-repro-published  the pushed image is bit-for-bit what this tag
       #                           builds. Compares the IMAGE MANIFEST, not the
       #                           index, whose attestations carry per-build
