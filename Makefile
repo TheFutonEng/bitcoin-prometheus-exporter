@@ -18,12 +18,13 @@ IMAGE       ?= $(REGISTRY)/bitcoin-prometheus-exporter
 TAG         ?= $(VERSION)
 IMAGE_REF   := $(IMAGE):$(TAG)
 
-# v0.1.0 publishes 0.1.0, 0.1 and latest. $(basename) drops the last
-# dot-suffix, so 0.1.0 -> 0.1. A prerelease (0.2.0-rc1) must not move `latest`
-# or the floating minor tag, so it publishes only its exact version.
-MAJOR_MINOR := $(basename $(VERSION))
+# v0.1.0 publishes exactly 0.1.0 and latest. No floating minor tag: a `0.1`
+# that silently moves between patch releases is a reference someone ends up
+# depending on by accident. `latest` is carried only because people expect it.
+#
+# A prerelease must not move `latest`, so it publishes only its exact version.
 ifeq (,$(findstring -,$(VERSION)))
-PUBLISH_TAGS ?= $(VERSION) $(MAJOR_MINOR) latest
+PUBLISH_TAGS ?= $(VERSION) latest
 else
 PUBLISH_TAGS ?= $(VERSION)
 endif

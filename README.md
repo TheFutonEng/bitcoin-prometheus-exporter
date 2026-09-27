@@ -127,8 +127,13 @@ Published tags, all `linux/amd64` and `linux/arm64` under one OCI index:
 | Tag | Moves |
 | --- | --- |
 | `0.1.0` | never — an exact release |
-| `0.1` | to the newest patch of that minor |
 | `latest` | to the newest release |
+
+There is deliberately no floating `0.1` tag: a reference that moves between
+patch releases is one people end up depending on without meaning to. `latest`
+exists only because some tooling expects it, and is not what you should deploy.
+Prereleases publish their exact version and nothing else, so they never move
+`latest`.
 
 Only tagged releases are published; there is no rolling `main` image. For
 anything you care about, pin the digest rather than a tag — `make digest-ref`

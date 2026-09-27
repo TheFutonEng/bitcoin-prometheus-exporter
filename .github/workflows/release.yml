@@ -70,8 +70,13 @@ jobs:
         run: |
           set -euo pipefail
           tag='${{ github.ref_name }}'
-          if [[ ! "${tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+          # Each component is semver's own numeric-identifier rule: 0, or a
+          # non-zero digit followed by digits. Leading zeros are rejected —
+          # v01.1.0 would otherwise resolve to version 01.1.0 and publish an
+          # image tagged 01.1.0.
+          if [[ ! "${tag}" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)$ ]]; then
             echo "::error::tag '${tag}' is not v<semver>, e.g. v0.1.0 or v0.2.0-rc1"
+            echo "::error::three components, no leading zeros"
             exit 1
           fi
           version="${BASH_REMATCH[1]}"
