@@ -1,0 +1,282 @@
+name: release
+
+# Publishes a signed, attested, reproducible image to GHCR on a version tag.
+#
+# The identity `make verify-sig` expects for keyless verification is this
+# workflow, on a tag. Renaming this file or changing the tag pattern breaks
+# verification for everything already published, so do both together if ever
+# needed.
+#
+# This is the only workflow with write access or secrets. ci.yml is triggered by
+# pull requests, including from forks, and deliberately has neither.
+
+on:
+  push:
+    tags: ['v*']
+  # No version input. The ref IS the version, and the guard below refuses
+  # anything that is not a tag — so dispatch is for re-running a release,
+  # launched FROM the tag. An input would be a second source of truth:
+  # dispatching from v0.1.0 while typing 0.2.0 would publish 0.2.0 signed with
+  # an identity claiming refs/tags/v0.1.0.
+  workflow_dispatch:
+    inputs:
+      allow_keyless_only:
+        description: 'Publish without the key-pair signature (breaks offline cosign verify --key)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # never interrupt a publish midway
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    env:
+      # A key pair is optional to cosign but not to us: cosign.pub is published
+      # and the README tells airgapped consumers to use `cosign verify --key`.
+      # A release without that signature silently breaks them, so a missing
+      # secret is a failure rather than a warning. Checked first, before any
+      # build runs.
+      HAS_KEY: ${{ secrets.COSIGN_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Publishing from a branch produces a keyless signature whose identity
+      # ends @refs/heads/<branch>, which the documented consumer command —
+      # anchored on @refs/tags/ — cannot verify. This workflow's own verify step
+      # derives the identity from github.ref too, so it would pass: a green run
+      # publishing an artifact nobody else can check.
+      - name: Refuse to publish from a non-tag ref
+        run: |
+          set -euo pipefail
+          case "${{ github.ref }}" in
+            refs/tags/*) echo "ref is a tag: ${{ github.ref }}" ;;
+            *) echo "::error::Refusing to publish from ${{ github.ref }}." \
+                    "Keyless signatures made here end @refs/heads/... and cannot be" \
+                    "verified with the documented command. Re-run this workflow" \
+                    "selecting the tag, not a branch."; exit 1 ;;
+          esac
+
+      - name: Resolve the version
+        id: v
+        run: |
+          set -euo pipefail
+          tag='${{ github.ref_name }}'
+          if [[ ! "${tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+            echo "::error::tag '${tag}' is not v<semver>, e.g. v0.1.0 or v0.2.0-rc1"
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "publishing ${version} from ${{ github.ref }}"
+          echo "tags: $(make -s print-publish-tags VERSION="${version}")"
+
+      # The bases must be pinned by digest and agree between the Dockerfile and
+      # the Makefile, or the reproducibility claim below is meaningless.
+      - name: Check pins
+        run: make check-pins
+
+      # Say out loud which modes will be used, before anything is built.
+      - name: Signing plan
+        run: |
+          set -euo pipefail
+          echo "keyless:  yes (identity = this workflow on ${{ github.ref }})"
+          if [ "${HAS_KEY}" = "true" ]; then
+            echo "key pair: yes (COSIGN_KEY secret present)"
+          elif [ "${{ inputs.allow_keyless_only }}" = "true" ]; then
+            echo "::warning::Publishing keyless-only by explicit request." \
+                 "cosign verify --key will not work for this release."
+          else
+            echo "::error::COSIGN_KEY secret is empty or unset." \
+                 "cosign.pub is published, so the README tells consumers to run" \
+                 "cosign verify --key, which would fail for this release." \
+                 "Set the secret, or re-run with allow_keyless_only=true."
+            exit 1
+          fi
+
+  # One job per platform, on NATIVE hardware. A Go binary cross-compiles
+  # cleanly, but "it compiled" is not "it runs" — this is what catches a
+  # binary that will not start on arm64. Nothing is published unless both pass.
+  preflight:
+    name: preflight (${{ matrix.arch }})
+    needs: guard
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build for this platform
+        run: make image VERSION="${VERSION}" PLATFORM="linux/${{ matrix.arch }}"
+      - name: Boot it on this platform's own hardware
+        run: make smoke VERSION="${VERSION}"
+
+  publish:
+    name: publish, verify, sign
+    needs: [guard, preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write   # push to GHCR
+      id-token: write   # REQUIRED for keyless signing — without it cosign has
+                        # no OIDC token and the signing step fails at the end,
+                        # after the image is already public.
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      # Note the name means two different things either side of this workflow:
+      # the SECRET holds the key's contents, the make variable is a PATH.
+      HAS_KEY: ${{ secrets.COSIGN_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pinned by version AND verified by hash. A repo that publishes signatures
+      # should not fetch the tool it signs with over plain HTTPS and trust
+      # whatever arrives. Bumping the version means updating the hash in the
+      # same reviewed commit.
+      - name: Install cosign
+        env:
+          COSIGN_VERSION: v3.1.3
+          COSIGN_SHA256: 4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -sSfL -o /tmp/cosign \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  /tmp/cosign" | sha256sum -c -
+          install -m 0755 /tmp/cosign "$HOME/.local/bin/cosign"
+          cosign version --json >/dev/null
+          echo "cosign ${COSIGN_VERSION} verified by hash"
+
+      # The runner's default buildx builder uses the `docker` driver, which
+      # cannot produce attestations at all. A docker-container builder can, and
+      # the buildkit version is pinned because the push and the rebuild compared
+      # against it must assemble layers with the same one — otherwise
+      # verify-repro-published compares two different builders' output.
+      - name: Set up the release builder
+        run: make builder
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" \
+          | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # ← the first irreversible step. Every platform, one index, every tag.
+      - name: Push
+        run: make push VERSION="${VERSION}"
+
+      # Everything below reads the REGISTRY, by digest, per platform.
+      #
+      #   verify-published        pull that platform by digest and boot it. By
+      #                           digest, because a tag reference could be
+      #                           satisfied from the local store — which would
+      #                           smoke-test what we just built rather than what
+      #                           is published.
+      #   verify-repro-published  the pushed image is bit-for-bit what this tag
+      #                           builds. Compares the IMAGE MANIFEST, not the
+      #                           index, whose attestations carry per-build
+      #                           timestamps by design. Do not "fix" that.
+      - name: Verify every published platform, by digest
+        run: |
+          set -euo pipefail
+          for p in $(make -s print-platforms); do
+            echo "::group::${p}"
+            make verify-published      VERSION="${VERSION}" PLATFORM="$p"
+            make verify-repro-published VERSION="${VERSION}" PLATFORM="$p"
+            echo "::endgroup::"
+          done
+
+      - name: Sign — keyless
+        env:
+          COSIGN_KEYLESS: '1'
+        run: make sign VERSION="${VERSION}"
+
+      - name: Sign — key pair
+        if: env.HAS_KEY == 'true'
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Trap FIRST, before anything that can fail. `set -e` with a later
+          # trap would leave the private key on disk if the step between them
+          # errored — a wrong COSIGN_PASSWORD, say, which cosign does reject.
+          trap 'shred -u /tmp/cosign.key 2>/dev/null || rm -f /tmp/cosign.key' EXIT
+          umask 077
+          printf '%s' "${{ secrets.COSIGN_KEY }}" > /tmp/cosign.key
+
+          # The public half is derived here and deliberately NOT shredded: the
+          # verify step needs it, and signing something nothing verifies is the
+          # gap this exists to close. Only the private half is a secret.
+          cosign public-key --key /tmp/cosign.key > /tmp/cosign.pub
+
+          # The committed cosign.pub must be the public half of the signing key,
+          # or every consumer following the README verifies against the wrong
+          # one. Nothing else catches this.
+          if [ ! -f cosign.pub ]; then
+            echo "::error::cosign.pub is not committed, but COSIGN_KEY is set."
+            echo "::error::Consumers are told to verify with it. Run:"
+            echo "::error::  cosign public-key --key <your key> > cosign.pub"
+            echo "::error::and commit it."
+            exit 1
+          fi
+          if ! diff -q <(tr -d '[:space:]' < cosign.pub) \
+                       <(tr -d '[:space:]' < /tmp/cosign.pub) >/dev/null; then
+            echo "::error::cosign.pub in the repo is not the public half of COSIGN_KEY."
+            echo "::error::Consumers verifying with the committed key would fail."
+            exit 1
+          fi
+          echo "cosign.pub matches the signing key"
+
+          make sign VERSION="${VERSION}" COSIGN_KEY=/tmp/cosign.key
+
+      # Verifies whichever modes were actually used, over the index and every
+      # image in it.
+      - name: Verify the signing chain round-trips
+        env:
+          COSIGN_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${HAS_KEY}" = "true" ]; then args+=(COSIGN_PUB=cosign.pub); fi
+          make verify-sig VERSION="${VERSION}" "${args[@]}"
+
+      - name: Publish the digests
+        run: |
+          set -euo pipefail
+          ref="$(make -s digest-ref VERSION="${VERSION}")"
+          {
+            echo "### Published"
+            echo "Tags: \`$(make -s print-publish-tags VERSION="${VERSION}" | tr ' ' ',')\`"
+            echo
+            echo "Pin this (the multi-arch index):"
+            echo '```'
+            echo "${ref}"
+            echo '```'
+            echo "Reproducible image manifests, one per platform:"
+            echo '```'
+            for p in $(make -s print-platforms); do
+              echo "$p  $(make -s platform-ref VERSION="${VERSION}" PLATFORM="$p")"
+            done
+            echo '```'
+            echo "Rebuild and compare:"
+            echo '```'
+            echo "git checkout ${{ github.ref_name }}"
+            echo "make verify-repro-published VERSION=${VERSION} PLATFORM=<platform>"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "published ${ref}"

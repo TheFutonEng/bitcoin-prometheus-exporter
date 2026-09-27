@@ -3,3 +3,9 @@
 
 # Local port-publishing overrides, machine specific
 docker-compose.override.yml
+
+# Cosign private keys. The PUBLIC half (cosign.pub) is committed on purpose —
+# consumers verify with it. The private half must never be, and `git add -A` is
+# how that accident happens.
+cosign.key
+*.key

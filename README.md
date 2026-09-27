@@ -115,12 +115,94 @@ scrape_configs:
 ```bash
 docker run --rm -p 9332:9332 \
   -v bitcoin-data:/data:ro \
-  ghcr.io/thefutoneng/bitcoin-prometheus-exporter:latest \
+  ghcr.io/thefutoneng/bitcoin-prometheus-exporter:0.1.0 \
   -rpc.url=http://bitcoind:8332 -rpc.cookie-file=/data/.cookie
 ```
 
 The image runs as uid `65532`, the same uid as `ghcr.io/thefutoneng/bitcoin`, so
 a shared data volume's cookie file is readable without extra permissions.
+
+Published tags, all `linux/amd64` and `linux/arm64` under one OCI index:
+
+| Tag | Moves |
+| --- | --- |
+| `0.1.0` | never — an exact release |
+| `0.1` | to the newest patch of that minor |
+| `latest` | to the newest release |
+
+Only tagged releases are published; there is no rolling `main` image. For
+anything you care about, pin the digest rather than a tag — `make digest-ref`
+prints it, and so does every release's job summary.
+
+## Verifying what you pulled
+
+The index and every image in it carry a cosign signature, and the index carries
+SLSA provenance and an SBOM produced during the build. Verifying is the point of
+publishing them.
+
+**Keyless** binds the signature to the workflow that built the image, so you are
+trusting a repository, ref and workflow rather than whoever holds a key:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp \
+    '^https://github\.com/TheFutonEng/bitcoin-prometheus-exporter/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/thefutoneng/bitcoin-prometheus-exporter:0.1.0
+```
+
+The identity is not optional. Without it you would accept a signature from
+anyone Sigstore will issue a certificate to, which is no check at all. The regexp
+is anchored at the start but not the end, so it accepts any tag from this
+workflow in this repository — deliberate, so one published command keeps
+working, but it means the signature attests to "a release of this repo" rather
+than "this exact version". Pin the digest if you care which.
+
+**Offline**, with the published key, for an airgap or anywhere Sigstore is
+unreachable:
+
+```bash
+cosign verify --key cosign.pub --insecure-ignore-tlog \
+  ghcr.io/thefutoneng/bitcoin-prometheus-exporter:0.1.0
+```
+
+The key-pair signature deliberately carries no transparency-log entry — an entry
+nobody can reach is not worth the dependency — so `--insecure-ignore-tlog` is
+expected. That warning is about the absence of a log, not about the signature.
+
+The provenance and SBOM ride in the index and need no network beyond the
+registry itself:
+
+```bash
+docker buildx imagetools inspect --format '{{ json .Provenance }}' \
+  ghcr.io/thefutoneng/bitcoin-prometheus-exporter:0.1.0
+docker buildx imagetools inspect --format '{{ json .SBOM }}' \
+  ghcr.io/thefutoneng/bitcoin-prometheus-exporter:0.1.0
+```
+
+### Reproducible builds
+
+Each platform's image is bit-for-bit what its tag builds, and you can check that
+yourself rather than taking our word for it:
+
+```bash
+git checkout v0.1.0
+make verify-repro-published PLATFORM=linux/amd64
+```
+
+That rebuilds the platform from this tree and compares the result against the
+image manifest digest in the registry. It is what the release itself runs before
+signing anything.
+
+What makes it hold: both base images are pinned by digest, the Go toolchain is
+pinned exactly, the build passes `-trimpath -buildvcs=false` with `CGO_ENABLED=0`,
+layer timestamps come from `SOURCE_DATE_EPOCH` (the commit time, so it is a
+property of the tree rather than of when you built), and the buildkit version is
+pinned so the comparison is not between two different builders.
+
+It compares **image manifests**, not the index. The index also contains
+attestation manifests, whose contents include build timestamps and random ids by
+design, so index digests are not expected to match and never will.
 
 ## Node configuration
 
@@ -199,6 +281,43 @@ Two knobs decide how many series the exporter produces:
   confirmation target per unit.
 
 Everything else is bounded by the node's own configuration.
+
+## Deployment considerations
+
+This repository ships no deployment manifests; how you run the exporter is
+yours to decide. What follows is the information that decision needs.
+
+The common arrangement is a **sidecar beside the node** — same Kubernetes pod,
+or same compose project. That shape is worth understanding because of what it
+does and does not seal:
+
+- **The node's RPC never leaves the pod.** Containers in a pod share a network
+  namespace, so the exporter reaches bitcoind on `127.0.0.1` and the RPC port
+  need not be exposed at all. The cookie comes off a shared volume; both this
+  image and `ghcr.io/thefutoneng/bitcoin` run as uid `65532`, so no permission
+  juggling is required.
+- **The scrape endpoint must leave the pod.** Prometheus runs elsewhere, so
+  `:9332` has to listen on the pod address rather than loopback. On a flat
+  cluster network that means anything able to route to the pod can read it.
+
+What a default scrape exposes is chain state, mempool, fees, hash rate, node
+version, and peer counts grouped by network, user agent and connection type.
+The chain is public and the aggregates name nobody.
+
+Two opt-in collectors change that materially:
+
+| Flag | Publishes | Consider |
+| --- | --- | --- |
+| `-collector.peers.detail` | per-peer addresses | your node's peer topology, which is what someone attempting an eclipse attack or deanonymisation wants |
+| `-collector.enable=wallet` | wallet balances | self-evident on a real node |
+
+Both are off by default, which is what keeps a default scrape low-risk.
+
+The exporter itself does no TLS and no authentication, deliberately. Where the
+scrape path needs protecting, the controls that fit are the ones already in
+your environment — a NetworkPolicy restricting `:9332` to the Prometheus pod, a
+service mesh's mTLS, or a reverse proxy — all of which sit below the
+application and need no credential distribution.
 
 ## Flags
 
@@ -468,6 +587,46 @@ defaults, including the mounted `bitcoin.conf`, are covered by the compose
 stack instead.
 
 They skip themselves if Docker is not available.
+
+### Releasing
+
+Releases are cut by pushing a tag; nothing else publishes. `ci.yml` runs on pull
+requests, including from forks, and has no write access or secrets —
+`release.yml` is the only workflow with either.
+
+```bash
+git tag -s v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+The workflow then: refuses to run from anything but a tag, checks the tag is
+semver and that the base pins agree, builds and boots the image on **native
+hardware for each platform**, pushes one multi-arch index with provenance and an
+SBOM, pulls each platform back **by digest** and boots it, proves each is
+bit-for-bit reproducible from the tag, signs the index and every image in it
+both ways, verifies its own signatures round-trip, and prints the digests to the
+job summary. Nothing is signed until every check above it has passed.
+
+First-time setup, once:
+
+```bash
+cosign generate-key-pair          # keep cosign.key and the password safe
+cosign public-key --key cosign.key > cosign.pub
+git add cosign.pub && git commit -m "release: publish the signing public key"
+gh secret set COSIGN_KEY < cosign.key
+gh secret set COSIGN_PASSWORD
+```
+
+A missing `COSIGN_KEY` fails the release rather than quietly downgrading to
+keyless-only, because `cosign.pub` being published means consumers are told to
+use it. `workflow_dispatch` with `allow_keyless_only` is the deliberate escape
+hatch. The workflow also refuses to publish if the committed `cosign.pub` is not
+the public half of the signing key — otherwise everyone following the README
+would verify against the wrong one.
+
+Re-running a release must be launched **from the tag**, not a branch: a keyless
+signature made on a branch carries an identity ending `@refs/heads/...`, which
+the documented verification command cannot check.
 
 ### Adding a collector
 
