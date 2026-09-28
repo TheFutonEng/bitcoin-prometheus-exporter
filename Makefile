@@ -18,12 +18,13 @@ IMAGE       ?= $(REGISTRY)/bitcoin-prometheus-exporter
 TAG         ?= $(VERSION)
 IMAGE_REF   := $(IMAGE):$(TAG)
 
-# v0.1.0 publishes 0.1.0, 0.1 and latest. $(basename) drops the last
-# dot-suffix, so 0.1.0 -> 0.1. A prerelease (0.2.0-rc1) must not move `latest`
-# or the floating minor tag, so it publishes only its exact version.
-MAJOR_MINOR := $(basename $(VERSION))
+# v0.1.0 publishes exactly 0.1.0 and latest. No floating minor tag: a `0.1`
+# that silently moves between patch releases is a reference someone ends up
+# depending on by accident. `latest` is carried only because people expect it.
+#
+# A prerelease must not move `latest`, so it publishes only its exact version.
 ifeq (,$(findstring -,$(VERSION)))
-PUBLISH_TAGS ?= $(VERSION) $(MAJOR_MINOR) latest
+PUBLISH_TAGS ?= $(VERSION) latest
 else
 PUBLISH_TAGS ?= $(VERSION)
 endif
@@ -127,12 +128,16 @@ smoke: ## Boot the local image and prove it serves metrics
 	@scripts/smoke-image.sh $(IMAGE_REF)
 
 .PHONY: push
+# Tags go in as repeated -t flags, not as a comma-separated name= inside
+# --output: the output spec is itself CSV, so a comma in a value is read as the
+# next field and buildx rejects it ("invalid value ...:0.1").
 push: check-pins builder ## Build every platform and push one index, with attestations
 	docker buildx --builder $(BUILDER) build --platform $(subst $(space),$(comma),$(PLATFORMS)) \
+	  $(foreach n,$(PUBLISH_NAMES),-t $(n)) \
 	  --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) \
 	  --build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
 	  --provenance=mode=max --sbom=true \
-	  --output "type=image,name=$(subst $(space),$(comma),$(PUBLISH_NAMES)),push=true,rewrite-timestamp=true" .
+	  --output "type=image,push=true,rewrite-timestamp=true" .
 
 .PHONY: digest-ref
 digest-ref: ## Print the published index as image@sha256:... — this is what consumers pin

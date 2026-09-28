@@ -70,8 +70,13 @@ jobs:
         run: |
           set -euo pipefail
           tag='${{ github.ref_name }}'
-          if [[ ! "${tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+          # Each component is semver's own numeric-identifier rule: 0, or a
+          # non-zero digit followed by digits. Leading zeros are rejected —
+          # v01.1.0 would otherwise resolve to version 01.1.0 and publish an
+          # image tagged 01.1.0.
+          if [[ ! "${tag}" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)$ ]]; then
             echo "::error::tag '${tag}' is not v<semver>, e.g. v0.1.0 or v0.2.0-rc1"
+            echo "::error::three components, no leading zeros"
             exit 1
           fi
           version="${BASH_REMATCH[1]}"
@@ -182,11 +187,20 @@ jobs:
 
       # Everything below reads the REGISTRY, by digest, per platform.
       #
-      #   verify-published        pull that platform by digest and boot it. By
-      #                           digest, because a tag reference could be
-      #                           satisfied from the local store — which would
-      #                           smoke-test what we just built rather than what
-      #                           is published.
+      #   verify-published        pull that platform by digest and, when this
+      #                           runner can run it, boot it. By digest, because
+      #                           a tag reference could be satisfied from the
+      #                           local store — which would smoke-test what we
+      #                           just built rather than what is published.
+      #
+      #                           This runner is amd64, so arm64 is pulled but
+      #                           not booted. Emulating it would be a WEAKER
+      #                           check than what already covers it: preflight
+      #                           booted that build on native arm64, and
+      #                           verify-repro-published proves the published
+      #                           image is bit-for-bit that build. Native boot
+      #                           of X plus published == X gives native boot of
+      #                           the published image, with no QEMU in the chain.
       #   verify-repro-published  the pushed image is bit-for-bit what this tag
       #                           builds. Compares the IMAGE MANIFEST, not the
       #                           index, whose attestations carry per-build
