@@ -28,7 +28,7 @@ import (
 
 // nodeImage is the node build the exporter is verified against. Override it to
 // test another release: NODE_IMAGE=ghcr.io/thefutoneng/bitcoin:31.1 go test ...
-var nodeImage = envOr("NODE_IMAGE", "ghcr.io/thefutoneng/bitcoin:31.1-1")
+var nodeImage = envOr("NODE_IMAGE", "ghcr.io/thefutoneng/bitcoin:31.1-3")
 
 func TestExporterAgainstRealNode(t *testing.T) {
 	node := startNode(t)

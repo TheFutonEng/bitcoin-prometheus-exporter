@@ -58,7 +58,7 @@ EXPORTER_URL   ?= http://127.0.0.1:9332
 PROMETHEUS_URL ?= http://127.0.0.1:9090
 export PROMETHEUS_URL
 
-NODE_IMAGE  ?= ghcr.io/thefutoneng/bitcoin:31.1-1
+NODE_IMAGE  ?= ghcr.io/thefutoneng/bitcoin:31.1-3
 
 export SOURCE_DATE_EPOCH
 

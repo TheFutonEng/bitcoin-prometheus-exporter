@@ -47,10 +47,20 @@ jobs:
       fail-fast: false
       matrix:
         # The exporter is meant to work with any Bitcoin Core node, so the
-        # integration suite runs against more than the pinned release. 31.1 and
-        # 31.1-1 also differ in how they split entrypoint from cmd, which keeps
-        # the harness honest about not depending on either.
+        # integration suite runs against more than the pinned release.
+        #
+        # 31.1-3   what the stack pins. Newest packaging.
+        # 31.1-1   the previous packaging, still in use by anyone who has not
+        #          bumped. Same runtime config as -3; only labels differ.
+        # 31.1     the ORIGINAL layout, which kept -datadir in cmd rather than
+        #          the entrypoint. This leg is the one that keeps the harness
+        #          honest about not depending on either split, and it is why the
+        #          list is not simply "the newest".
+        #
+        # 31.1-2 is deliberately absent: its upstream release failed after the
+        # push and carries no signatures, so nobody should be running it.
         node-image:
+          - ghcr.io/thefutoneng/bitcoin:31.1-3
           - ghcr.io/thefutoneng/bitcoin:31.1-1
           - ghcr.io/thefutoneng/bitcoin:31.1
     name: integration (${{ matrix.node-image }})
