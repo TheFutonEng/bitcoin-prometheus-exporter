@@ -2,7 +2,7 @@ name: bitcoin-exporter
 
 services:
   bitcoind:
-    image: ghcr.io/thefutoneng/bitcoin:31.1-1
+    image: ghcr.io/thefutoneng/bitcoin:31.1-3
     container_name: bitcoind
     # No command: the image entrypoint already supplies -datadir=/data and
     # -printtoconsole, and every other setting comes from the mounted
