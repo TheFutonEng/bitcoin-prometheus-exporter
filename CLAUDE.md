@@ -40,38 +40,49 @@ the bitcoin repo: keyless signing trusts any `release.yml` run on a tag, and
 clwsbot cannot read `bypass_actors` (the API returns null to non-admins), so
 the admin bypass on both rulesets can only be checked from Rob's account.
 
-## Open items, in priority order
+## Done (2026-11-27)
 
-1. ~~The `release` environment has no required reviewer.~~ Fixed by Rob
-   2026-11-27 (not re-verified from clwsbot: reading environment protection
-   needs admin).
-2. **`release.yml` does not name the environment yet.** The change (`environment:
-   release` on `guard` and `publish`, same as TheFutonEng/bitcoin#28) is commit
-   `75abaa7` on branch `release-environment` in Claude's clone, not pushed:
-   it touches a workflow, so Rob pushes it. Until it merges, with the repo
-   secrets gone, `HAS_KEY` reads empty and `guard` refuses to release (unless
-   dispatched with `allow_keyless_only`). Safe, but releases are blocked.
-3. **The required check `integration` never reports** (the matrix legs are
-   `integration (<image>)`). Fixed on branch `ci/required-checks`: an
-   always-running `integration-result` job named `integration` that passes
-   only if change detection succeeded and every matrix leg did. Documentation-
-   only changes are skipped by a `changes` job, not `paths-ignore`, so the
-   required check still reports on them (this supersedes `ci/skip-docs-only`).
-   Workflow change, so Rob pushes. Once merged, `test` and `stack` can be added
-   to the ruleset safely: they are skipped (which counts as passing) only when
-   `changes` says docs-only, and if `changes` itself fails, `integration` fails.
-4. **Node image bump to `32.1-1`** is on branch `chore/node-image-32.1-1`
-   (stacked on `ci/required-checks`):
-   `Makefile`, `docker-compose.yml`, `integration_test.go` and the README. The
-   peer-subversion assertion now asks the peer node for its own subversion
-   instead of hard-coding `/Satoshi:31.1.0/`, since the matrix spans releases.
-   The CI matrix is 32.1-1, 31.3-2, 31.1-3 and 31.1 (the original
-   `-datadir`-in-cmd layout; keep that leg). It touches `ci.yml`, so Rob pushes.
-   Integration suite passed locally against 32.1-1 and the 31.x images on
-   2026-11-27; the compose stack was left to CI. The only RPC difference 32.x
-   makes to the exporter's output: `getmempoolinfo` no longer has `fullrbf`, so
-   `bitcoin_mempool_full_rbf` is absent (by design: missing fields are omitted;
-   no dashboard or alert uses it). Found by diffing `/metrics` with
-   `-collectors=all` against a regtest 31.3-2 and 32.1-1 node.
-5. **PR #7** (Renovate's onboarding, opened 2026-11-25) is open and
-   undecided.
+- `release` environment has a required reviewer (Rob; not re-verifiable from
+  clwsbot, reading environment protection needs admin).
+- #9: `guard` and `publish` name `environment: release`, so releases can sign
+  again with the repo-level secrets gone.
+- #10: the required `integration` check reports. It is the always-running
+  `integration-result` job, named `integration`, which fails if change
+  detection fails and, on a code change, unless every matrix leg passed. A
+  `changes` job skips `test`, `integration` and `stack` on `*.md`/`LICENSE`-only
+  changes (via `if:`, not `paths-ignore`, so the required check still reports).
+- #11: node image `32.1-1` in the Makefile, `docker-compose.yml` and the
+  integration default; CI matrix 32.1-1, 31.3-2, 31.1-3 and 31.1 (the original
+  `-datadir`-in-cmd layout; keep that leg). The peer-subversion assertion asks
+  the peer node instead of hard-coding a release. Bitcoin Core 32 dropped
+  `fullrbf` from `getmempoolinfo`, so `bitcoin_mempool_full_rbf` is absent
+  against it (missing fields are omitted by design); that was the only
+  `/metrics` difference (all collectors) between 31.3-2 and 32.1-1.
+- #7: Renovate is on. See below.
+
+## Renovate
+
+`renovate.json` extends `config:recommended`, plus:
+
+- Regex managers for the Makefile's `GO_BASE`/`RUNTIME_BASE` and `ci.yml`'s
+  `GO_VERSION`, all grouped with the Dockerfile ARGs into one **"base images"**
+  PR. The Dockerfile and Makefile pins must agree (`scripts/check-pins.sh`),
+  and that check runs only in `release.yml`, so a split bump would pass PR CI
+  and break the next release.
+- `ghcr.io/thefutoneng/bitcoin` is disabled. A node bump is manual: it touches
+  the Makefile, `docker-compose.yml`, `integration_test.go` and the CI matrix,
+  and should be checked by diffing `/metrics` against the old and new node.
+
+Renovate's PRs that change `.github/workflows/` (action bumps, `GO_VERSION`)
+come from the Renovate app, which can push workflow changes; they still need
+Rob's approval like everything else.
+
+## Open items
+
+1. Optional: add `test` and `stack` to the `main` ruleset's required checks.
+   Safe since #10: they skip only on docs-only changes, and a failed `changes`
+   job fails `integration`.
+2. Consider running `make check-pins` in PR CI (a workflow change, so Rob
+   pushes) so a pin mismatch fails before merge, not at release time.
+3. No release since `v0.1.0`. The next one is the first through the `release`
+   environment.
