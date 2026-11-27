@@ -8,6 +8,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,7 +29,7 @@ import (
 
 // nodeImage is the node build the exporter is verified against. Override it to
 // test another release: NODE_IMAGE=ghcr.io/thefutoneng/bitcoin:31.1 go test ...
-var nodeImage = envOr("NODE_IMAGE", "ghcr.io/thefutoneng/bitcoin:31.1-3")
+var nodeImage = envOr("NODE_IMAGE", "ghcr.io/thefutoneng/bitcoin:32.1-1")
 
 func TestExporterAgainstRealNode(t *testing.T) {
 	node := startNode(t)
@@ -166,13 +167,20 @@ func TestPeerMetricsAgainstRealNodes(t *testing.T) {
 	if got := values[`bitcoin_peers{direction="inbound"}`]; got != 1 {
 		t.Errorf("inbound peers = %v, want 1", got)
 	}
-	if got := values[`bitcoin_peers_by_subversion{subversion="/Satoshi:31.1.0/"}`]; got != 1 {
-		t.Errorf("peers by subversion = %v, want 1", got)
+	// The peer's subversion is whatever the second node advertises, which
+	// depends on NODE_IMAGE, so ask it rather than hard-coding a release.
+	var info struct {
+		Subversion string `json:"subversion"`
+	}
+	if err := json.Unmarshal([]byte(second.cliMust(t, "getnetworkinfo")), &info); err != nil || info.Subversion == "" {
+		t.Fatalf("second node's getnetworkinfo: subversion %q, err %v", info.Subversion, err)
+	}
+	if got := values[fmt.Sprintf("bitcoin_peers_by_subversion{subversion=%q}", info.Subversion)]; got != 1 {
+		t.Errorf("peers by subversion %s = %v, want 1", info.Subversion, got)
 	}
 	if _, ok := values[`bitcoin_peers_ping_seconds{stat="avg"}`]; !ok {
 		t.Error("want an aggregate ping metric once a peer is connected")
 	}
-	_ = second
 }
 
 type node struct {

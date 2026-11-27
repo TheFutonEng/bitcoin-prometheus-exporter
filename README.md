@@ -8,7 +8,7 @@ It talks to any Bitcoin Core node reachable over RPC, local or remote, pruned or
 archival, with or without a wallet. Missing or version-specific RPC fields are
 omitted rather than reported as zero, so a metric that is present is a metric the
 node actually answered. Development and CI verify it against
-`ghcr.io/thefutoneng/bitcoin:31.1-3`.
+`ghcr.io/thefutoneng/bitcoin:32.1-1`.
 
 ```
 ┌──────────┐   JSON-RPC    ┌──────────┐   /metrics   ┌────────────┐
@@ -427,7 +427,7 @@ matching bitcoind.
 | --- | --- | --- |
 | `bitcoin_mempool_bytes` | — | Sum of the virtual sizes of all mempool transactions. |
 | `bitcoin_mempool_fill_ratio` | — | Mempool memory usage divided by -maxmempool, 0 to 1. |
-| `bitcoin_mempool_full_rbf` | — | 1 if the node accepts replacement of any transaction regardless of opt-in. |
+| `bitcoin_mempool_full_rbf` | — | 1 if the node accepts replacement of any transaction regardless of opt-in. Absent from Bitcoin Core 32.0 on, which no longer reports it. |
 | `bitcoin_mempool_loaded` | — | 1 once the mempool has finished loading from disk. |
 | `bitcoin_mempool_max_bytes` | — | Configured -maxmempool memory ceiling. |
 | `bitcoin_mempool_min_fee_btc_per_kvb` | — | Lowest fee rate the mempool currently accepts, in BTC/kvB. |
@@ -576,7 +576,7 @@ make metrics     EXPORTER_URL=http://192.168.1.6:19332
 make check-stack PROMETHEUS_URL=http://192.168.1.6:19090
 ```
 
-The integration tests start `ghcr.io/thefutoneng/bitcoin:31.1-3` in regtest,
+The integration tests start `ghcr.io/thefutoneng/bitcoin:32.1-1` in regtest,
 mine blocks, spend, peer two nodes together, and assert on the gathered metrics
 through a `prometheus.NewPedanticRegistry` — the same strictness the binary
 applies at runtime. Point them at another release to check compatibility:
@@ -587,8 +587,8 @@ NODE_IMAGE=ghcr.io/thefutoneng/bitcoin:31.1 make test-integration
 
 The harness overrides the image's entrypoint and passes every bitcoind flag
 itself, so it does not care how a given image splits entrypoint from cmd — 31.1
-and 31.1-1 differ there. CI runs the suite against `31.1-3`, `31.1-1` and
-`31.1` — the last of those being the one with the older layout. The image's own
+and 31.1-1 differ there. CI runs the suite against `32.1-1`, `31.3-2`, `31.1-3`
+and `31.1` — the last of those being the one with the older layout. The image's own
 defaults, including the mounted `bitcoin.conf`, are covered by the compose stack
 instead.
 
