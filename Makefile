@@ -39,7 +39,7 @@ PLATFORM    ?= linux/amd64
 # Pinned by digest, and kept identical to the ARGs in the Dockerfile —
 # check-pins asserts it. A moving tag would quietly break the claim that the
 # published image is what this tree builds.
-GO_BASE      ?= golang:1.26.2-bookworm@sha256:47ce5636e9936b2c5cbf708925578ef386b4f8872aec74a67bd13a627d242b19
+GO_BASE      ?= golang:1.27.4-bookworm@sha256:ce59b41415e2524ae99926fe1f37ce48ba8c194dcbd2a56a65436cdcefa2bd34
 RUNTIME_BASE ?= gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 # The push and any rebuild compared against it must assemble layers with the
