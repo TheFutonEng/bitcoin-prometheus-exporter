@@ -9,6 +9,16 @@ name: release
 #
 # This is the only workflow with write access or secrets. ci.yml is triggered by
 # pull requests, including from forks, and deliberately has neither.
+#
+# The signing secrets (COSIGN_KEY, COSIGN_PASSWORD) live in the `release`
+# ENVIRONMENT, not at repository level, and only `guard` and `publish` name it.
+# A repository secret is readable by any workflow run in this repo, including
+# one pushed on a branch by anyone with write access, and the key-pair
+# signature carries no identity for `cosign verify --key` to check. The
+# environment admits only `v*` tags, which the `release tags` ruleset restricts
+# to repository admins, and requires a reviewer on top. There must be NO
+# repository secrets of the same names: a job without `environment:` would
+# still read those.
 
 on:
   push:
@@ -37,6 +47,10 @@ jobs:
     name: guard
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Here as well as on publish, because the signing plan must see the secret
+    # to fail early on its absence. With a required reviewer on the
+    # environment this is also the first approval, before anything is built.
+    environment: release
     outputs:
       version: ${{ steps.v.outputs.version }}
     env:
@@ -137,6 +151,7 @@ jobs:
     needs: [guard, preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    environment: release
     permissions:
       contents: read
       packages: write   # push to GHCR
