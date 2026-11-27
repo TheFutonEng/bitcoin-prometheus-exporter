@@ -47,7 +47,7 @@ the admin bypass on both rulesets can only be checked from Rob's account.
    needs admin).
 2. **`release.yml` does not name the environment yet.** The change (`environment:
    release` on `guard` and `publish`, same as TheFutonEng/bitcoin#28) is commit
-   `097f2a6` on branch `release-environment` in Claude's clone, not pushed:
+   `75abaa7` on branch `release-environment` in Claude's clone, not pushed:
    it touches a workflow, so Rob pushes it. Until it merges, with the repo
    secrets gone, `HAS_KEY` reads empty and `guard` refuses to release (unless
    dispatched with `allow_keyless_only`). Safe, but releases are blocked.
@@ -60,14 +60,18 @@ the admin bypass on both rulesets can only be checked from Rob's account.
    Workflow change, so Rob pushes. Once merged, `test` and `stack` can be added
    to the ruleset safely: they are skipped (which counts as passing) only when
    `changes` says docs-only, and if `changes` itself fails, `integration` fails.
-4. **Node image is three bitcoin releases behind.** Pinned to `31.1-3` in
-   `Makefile` (`NODE_IMAGE`), `docker-compose.yml`, and
-   `internal/integration/integration_test.go`; CI's matrix tests 31.1-3,
-   31.1-1 and 31.1. Current is **`31.3-2`** (Bitcoin Core 31.3 on
-   `base-nossl-debian13`); 31.2-1 and 31.3-1 also exist. A bump also has to
-   change the hard-coded `/Satoshi:31.1.0/` subversion in
-   `integration_test.go`. Keep the `31.1` leg in the matrix: it is the one
-   with the original `-datadir`-in-cmd layout, per the comment in `ci.yml`.
-   Bitcoin Core 32.x is next on the node side and may change RPC fields.
+4. **Node image bump to `32.1-1`** is on branch `chore/node-image-32.1-1`
+   (stacked on `ci/required-checks`):
+   `Makefile`, `docker-compose.yml`, `integration_test.go` and the README. The
+   peer-subversion assertion now asks the peer node for its own subversion
+   instead of hard-coding `/Satoshi:31.1.0/`, since the matrix spans releases.
+   The CI matrix is 32.1-1, 31.3-2, 31.1-3 and 31.1 (the original
+   `-datadir`-in-cmd layout; keep that leg). It touches `ci.yml`, so Rob pushes.
+   Integration suite passed locally against 32.1-1 and the 31.x images on
+   2026-11-27; the compose stack was left to CI. The only RPC difference 32.x
+   makes to the exporter's output: `getmempoolinfo` no longer has `fullrbf`, so
+   `bitcoin_mempool_full_rbf` is absent (by design: missing fields are omitted;
+   no dashboard or alert uses it). Found by diffing `/metrics` with
+   `-collectors=all` against a regtest 31.3-2 and 32.1-1 node.
 5. **PR #7** (Renovate's onboarding, opened 2026-11-25) is open and
    undecided.
