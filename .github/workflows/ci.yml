@@ -1,5 +1,23 @@
 name: ci
 
+# Every job behind the `changes` gate is skipped on a documentation-only change.
+# The workflow itself always runs: the main ruleset requires a check named
+# `integration`, and a workflow filtered out by paths-ignore never reports it,
+# which would block a docs-only PR forever.
+#
+# The required check is the `integration-result` job, named `integration`. It
+# always runs and passes only if change detection succeeded and, for a code
+# change, every leg of the integration matrix passed. The matrix legs report as
+# `integration (<image>)`, so they never satisfy the required name themselves.
+#
+# Documentation-only means every changed file is `*.md` or `LICENSE`, and
+# nothing else: a file type nobody thought about runs the suite rather than
+# silently skipping it. Deliberately NOT treated as documentation, because they
+# look inert but are exactly what a job validates:
+#   deploy/grafana/dashboards/*.json  the stack job checks every query as PromQL
+#   deploy/prometheus/alerts.yml      the stack job checks each rule evaluates
+#   deploy/bitcoin/*.conf             the stack job boots the node from these
+#   cosign.pub                        release.yml diffs it against the signing key
 on:
   push:
     branches: [main]
@@ -12,7 +30,49 @@ env:
   GO_VERSION: "1.26"
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Is anything other than documentation changed?
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A pull_request checks out the merge commit, so its first parent is
+          # the base and the diff is exactly what merging would change. A push
+          # to main compares with the commit main pointed at before.
+          if [ "$EVENT" = pull_request ]; then
+            base=HEAD^1
+          else
+            base=$BEFORE
+          fi
+          # Anything that cannot be diffed (a new branch, a force push past a
+          # commit we do not have) counts as code, as does an empty diff.
+          if ! files=$(git diff --name-only "$base" HEAD 2>/dev/null) || [ -z "$files" ]; then
+            echo "cannot diff against '$base'; running everything"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r f; do
+            case "$f" in
+              *.md|LICENSE) ;;
+              *) echo "code change: $f"; code=true ;;
+            esac
+          done <<< "$files"
+          [ "$code" = true ] || echo "documentation only:" $files
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -42,6 +102,8 @@ jobs:
         run: go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
 
   integration:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -79,7 +141,36 @@ jobs:
           NODE_IMAGE: ${{ matrix.node-image }}
         run: go test -tags integration -count=1 -timeout 15m ./internal/integration/
 
+  # The required check. See the comment at the top.
+  integration-result:
+    name: integration
+    needs: [changes, integration]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Change detection succeeded and the matrix passed, or was not needed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          MATRIX: ${{ needs.integration.result }}
+        run: |
+          # A failed `changes` job skips everything after it, and a skipped job
+          # looks like a pass. So its failure has to fail this one.
+          if [ "$CHANGES" != success ]; then
+            echo "change detection: $CHANGES"; exit 1
+          fi
+          if [ "$CODE" != true ]; then
+            echo "documentation-only change: the integration suite did not need to run"
+            exit 0
+          fi
+          if [ "$MATRIX" != success ]; then
+            echo "integration matrix: $MATRIX"; exit 1
+          fi
+          echo "every integration leg passed"
+
   stack:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

@@ -42,25 +42,24 @@ the admin bypass on both rulesets can only be checked from Rob's account.
 
 ## Open items, in priority order
 
-1. **The `release` environment has no required reviewer.** Its only
-   protection rule is the tag policy. bitcoin's has `required_reviewers:
-   TheFutonEng`. Until added, nothing stops a release run from reaching the
-   secrets once a tag exists. Rob: Settings → Environments → release →
-   Required reviewers.
+1. ~~The `release` environment has no required reviewer.~~ Fixed by Rob
+   2026-11-27 (not re-verified from clwsbot: reading environment protection
+   needs admin).
 2. **`release.yml` does not name the environment yet.** The change (`environment:
    release` on `guard` and `publish`, same as TheFutonEng/bitcoin#28) is commit
    `097f2a6` on branch `release-environment` in Claude's clone, not pushed:
    it touches a workflow, so Rob pushes it. Until it merges, with the repo
    secrets gone, `HAS_KEY` reads empty and `guard` refuses to release (unless
    dispatched with `allow_keyless_only`). Safe, but releases are blocked.
-3. **The required check `integration` never reports.** The `integration` job
-   is a matrix named `integration (<node image>)`, so the checks are
-   `integration (ghcr.io/thefutoneng/bitcoin:31.1-3)` etc. A required context
-   called plain `integration` waits forever, so every PR needs an admin
-   bypass to merge. Fix: a small aggregate job named `integration` that
-   `needs:` the matrix (a workflow change, so Rob pushes), or require the
-   matrix names (which then break whenever the matrix changes). `test` and
-   `stack` are not required at all and probably should be.
+3. **The required check `integration` never reports** (the matrix legs are
+   `integration (<image>)`). Fixed on branch `ci/required-checks`: an
+   always-running `integration-result` job named `integration` that passes
+   only if change detection succeeded and every matrix leg did. Documentation-
+   only changes are skipped by a `changes` job, not `paths-ignore`, so the
+   required check still reports on them (this supersedes `ci/skip-docs-only`).
+   Workflow change, so Rob pushes. Once merged, `test` and `stack` can be added
+   to the ruleset safely: they are skipped (which counts as passing) only when
+   `changes` says docs-only, and if `changes` itself fails, `integration` fails.
 4. **Node image is three bitcoin releases behind.** Pinned to `31.1-3` in
    `Makefile` (`NODE_IMAGE`), `docker-compose.yml`, and
    `internal/integration/integration_test.go`; CI's matrix tests 31.1-3,
