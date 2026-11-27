@@ -8,6 +8,14 @@
       "managerFilePatterns": ["/^Makefile$/"],
       "matchStrings": ["(?:GO_BASE|RUNTIME_BASE)\\s*\\?=\\s*(?<depName>[^:\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The Go minor version CI tests with, which must follow the golang build image",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": ["GO_VERSION:\\s*\"(?<currentValue>\\d+\\.\\d+)\""],
+      "depNameTemplate": "golang",
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
