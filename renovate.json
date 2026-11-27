@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Base image pins in the Makefile, which must match the Dockerfile's ARGs (scripts/check-pins.sh)",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": ["(?:GO_BASE|RUNTIME_BASE)\\s*\\?=\\s*(?<depName>[^:\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Dockerfile and Makefile base pins move together, in one PR",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["golang", "gcr.io/distroless/static-debian12"],
+      "groupName": "base images"
+    },
+    {
+      "description": "Node image bumps are manual: they also touch the Makefile, integration_test.go and the CI matrix",
+      "matchPackageNames": ["ghcr.io/thefutoneng/bitcoin"],
+      "enabled": false
+    }
+  ]
+}
