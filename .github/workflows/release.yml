@@ -61,7 +61,7 @@ jobs:
       # build runs.
       HAS_KEY: ${{ secrets.COSIGN_KEY != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Publishing from a branch produces a keyless signature whose identity
       # ends @refs/heads/<branch>, which the documented consumer command —
@@ -140,7 +140,7 @@ jobs:
     env:
       VERSION: ${{ needs.guard.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build for this platform
         run: make image VERSION="${VERSION}" PLATFORM="linux/${{ matrix.arch }}"
       - name: Boot it on this platform's own hardware
@@ -164,7 +164,7 @@ jobs:
       # the SECRET holds the key's contents, the make variable is a PATH.
       HAS_KEY: ${{ secrets.COSIGN_KEY != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Pinned by version AND verified by hash. A repo that publishes signatures
       # should not fetch the tool it signs with over plain HTTPS and trust
